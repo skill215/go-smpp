@@ -537,7 +537,7 @@ func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage
 		}
 
 		fields := pdutlv.Fields{
-			pdutlv.TagMessagePayload:     payload[i*maxLen : end],
+			pdutlv.TagMessagePayload:     payload[i*maxLen : end : len(payload)],
 			pdutlv.TagMoreMessagesToSend: 1,
 		}
 		if i == countParts-1 {
