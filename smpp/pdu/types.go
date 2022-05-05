@@ -225,6 +225,57 @@ func NewSubmitSMResp() Body {
 	return b
 }
 
+// DataSM PDU.
+type DataSM struct{ *codec }
+
+func newDataSM(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.ServiceType,
+			pdufield.SourceAddrTON,
+			pdufield.SourceAddrNPI,
+			pdufield.SourceAddr,
+			pdufield.DestAddrTON,
+			pdufield.DestAddrNPI,
+			pdufield.DestinationAddr,
+			pdufield.ESMClass,
+			pdufield.RegisteredDelivery,
+			pdufield.DataCoding,
+		},
+	}
+}
+
+// NewDataSM creates and initializes a new DataSM PDU.
+func NewDataSM(fields pdutlv.Fields) Body {
+	b := newSubmitSM(&Header{ID: DataSMID})
+	b.init()
+	for tag, value := range fields {
+		_ = b.t.Set(tag, value)
+	}
+	return b
+}
+
+// DataSMResp PDU.
+type DataSMResp struct{ *codec }
+
+// newDataSMResp creates and initializes a new newDataSMResp PDU.
+func newDataSMResp(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.MessageID,
+		},
+	}
+}
+
+// NewDataSMResp creates and initializes a new NewDataSMResp PDU.
+func NewDataSMResp() Body {
+	b := newDataSMResp(&Header{ID: DataSMRespID})
+	b.init()
+	return b
+}
+
 // SubmitMulti PDU.
 type SubmitMulti struct{ *codec }
 

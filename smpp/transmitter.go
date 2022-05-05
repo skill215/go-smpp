@@ -169,6 +169,17 @@ func newUnsucessDest(p pdufield.UnSme) UnsucessDest {
 	return unDest
 }
 
+// interface for ShortMessage and DataMessage
+type SM interface {
+	// Resp returns the response PDU, or nil if not set.
+	Resp() pdu.Body
+
+	// RespID is a shortcut to Resp().Fields()[pdufield.MessageID].
+	// Returns empty if the response PDU is not available, or does
+	// not contain the MessageID field.
+	RespID() string
+}
+
 // ShortMessage configures a short message that can be submitted via
 // the Transmitter. When returned from Submit, the ShortMessage
 // provides Resp and RespID.
@@ -270,6 +281,119 @@ func (sm *ShortMessage) UnsuccessSmes() ([]UnsucessDest, error) {
 	return nil, errors.New("Cannot convert PDU field to UnSmeList")
 }
 
+// DataMessage configures a data message that can be data_sm via
+// the Transmitter. When returned from Data_sm, the DataMessage
+// provides Resp and RespID.
+type DataMessage struct {
+	Src      string
+	Dst      string
+	Validity time.Duration
+	Register pdufield.DeliverySetting
+
+	// Other fields, normally optional.
+	TLVFields            pdutlv.Fields
+	ServiceType          string
+	SourceAddrTON        uint8
+	SourceAddrNPI        uint8
+	DestAddrTON          uint8
+	DestAddrNPI          uint8
+	ESMClass             uint8
+	ProtocolID           uint8
+	PriorityFlag         uint8
+	ScheduleDeliveryTime string
+	ReplaceIfPresentFlag uint8
+	SMDefaultMsgID       uint8
+	NumberDests          uint8
+
+	resp struct {
+		sync.Mutex
+		p pdu.Body
+	}
+}
+
+// Resp returns the response PDU, or nil if not set.
+func (dm *DataMessage) Resp() pdu.Body {
+	dm.resp.Lock()
+	defer dm.resp.Unlock()
+	return dm.resp.p
+}
+
+// RespID is a shortcut to Resp().Fields()[pdufield.MessageID].
+// Returns empty if the response PDU is not available, or does
+// not contain the MessageID field.
+func (dm *DataMessage) RespID() string {
+	dm.resp.Lock()
+	defer dm.resp.Unlock()
+	if dm.resp.p == nil {
+		return ""
+	}
+	f := dm.resp.p.Fields()[pdufield.MessageID]
+	if f == nil {
+		return ""
+	}
+	return f.String()
+}
+
+// NumbUnsuccess is a shortcut to Resp().Fields()[pdufield.NoUnsuccess].
+// Returns zero and an error if the response PDU is not available, or does
+// not contain the NoUnsuccess field.
+func (dm *DataMessage) NumbUnsuccess() (int, error) {
+	dm.resp.Lock()
+	defer dm.resp.Unlock()
+	if dm.resp.p == nil {
+		return 0, errors.New("Response PDU not available")
+	}
+	f := dm.resp.p.Fields()[pdufield.NoUnsuccess]
+	if f == nil {
+		return 0, errors.New("Response PDU does not contain NoUnsuccess field")
+	}
+	i, err := strconv.Atoi(f.String())
+	if err != nil {
+		return 0, fmt.Errorf("Failed to convert PDU value to string, error: %s", err.Error())
+	}
+	return i, nil
+}
+
+// UnsuccessSmes returns a list with the SME address(es) or/and Distribution List names to
+// which submission was unsuccessful and the respective errors, when submit multi is used.
+// Returns nil and an error if the response PDU is not available, or does
+// not contain the unsuccess_sme field.
+func (dm *DataMessage) UnsuccessSmes() ([]UnsucessDest, error) {
+	dm.resp.Lock()
+	defer dm.resp.Unlock()
+	if dm.resp.p == nil {
+		return nil, errors.New("Response PDU not available")
+	}
+	f := dm.resp.p.Fields()[pdufield.UnsuccessSme]
+	if f == nil {
+		return nil, errors.New("Response PDU does not contain UnsuccessSme field")
+	}
+	usl, ok := f.(*pdufield.UnSmeList)
+	if ok {
+		var udl []UnsucessDest
+		for i := range usl.Data {
+			udl = append(udl, newUnsucessDest(usl.Data[i]))
+		}
+		return udl, nil
+	}
+	return nil, errors.New("Cannot convert PDU field to UnSmeList")
+}
+
+// Submit sends a short message and returns and updates the given
+// sm with the response status. It returns the same sm object.
+func (t *Transmitter) Submit(sm *ShortMessage) (*ShortMessage, error) {
+	if len(sm.DstList) > 0 || len(sm.DLs) > 0 {
+		// if we have a single destination address add it to the list
+		if sm.Dst != "" {
+			sm.DstList = append(sm.DstList, sm.Dst)
+		}
+		p := pdu.NewSubmitMulti(sm.TLVFields)
+		return t.submitMsgMulti(sm, p, uint8(sm.Text.Type()))
+	}
+	p := pdu.NewSubmitSM(sm.TLVFields)
+	return t.submitMsg(sm, p, uint8(sm.Text.Type()))
+}
+
 func (t *Transmitter) do(p pdu.Body) (*tx, error) {
 	t.cl.Lock()
 	notbound := t.cl.client == nil
@@ -307,21 +431,6 @@ func (t *Transmitter) do(p pdu.Body) (*tx, error) {
 	case <-t.cl.respTimeout():
 		return nil, ErrTimeout
 	}
-}
-
-// Submit sends a short message and returns and updates the given
-// sm with the response status. It returns the same sm object.
-func (t *Transmitter) Submit(sm *ShortMessage) (*ShortMessage, error) {
-	if len(sm.DstList) > 0 || len(sm.DLs) > 0 {
-		// if we have a single destination address add it to the list
-		if sm.Dst != "" {
-			sm.DstList = append(sm.DstList, sm.Dst)
-		}
-		p := pdu.NewSubmitMulti(sm.TLVFields)
-		return t.submitMsgMulti(sm, p, uint8(sm.Text.Type()))
-	}
-	p := pdu.NewSubmitSM(sm.TLVFields)
-	return t.submitMsg(sm, p, uint8(sm.Text.Type()))
 }
 
 // SubmitLongMsg sends a long message (more than 140 bytes)
@@ -382,6 +491,68 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 		f.Set(pdufield.ReplaceIfPresentFlag, sm.ReplaceIfPresentFlag)
 		f.Set(pdufield.SMDefaultMsgID, sm.SMDefaultMsgID)
 		f.Set(pdufield.DataCoding, uint8(sm.Text.Type()))
+		resp, err := t.do(p)
+		if err != nil {
+			return nil, err
+		}
+		sm.resp.Lock()
+		sm.resp.p = resp.PDU
+		sm.resp.Unlock()
+		if resp.PDU == nil {
+			return parts, fmt.Errorf("unexpected empty PDU")
+		}
+		if id := resp.PDU.Header().ID; id != pdu.SubmitSMRespID {
+			return parts, fmt.Errorf("unexpected PDU ID: %s", id)
+		}
+		if s := resp.PDU.Header().Status; s != 0 {
+			return parts, s
+		}
+		if resp.Err != nil {
+			return parts, resp.Err
+		}
+		parts = append(parts, *sm)
+	}
+	return parts, nil
+}
+
+// DataSmLongMessagePayload sends data_sm with a long message_payload (more than 140 bytes)
+// and returns and updates the given sm with the response status.
+// It returns the same sm object.
+func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage, error) {
+	maxLen := 140
+	payload := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
+	countParts := int((len(payload))/maxLen) + 1
+
+	parts := make([]ShortMessage, 0, countParts)
+
+	for i := 0; i < countParts; i++ {
+		end := countParts
+		if i != countParts-1 {
+			end = (i + 1) * maxLen
+		}
+
+		fields := pdutlv.Fields{
+			pdutlv.TagMessagePayload:     payload[i*maxLen : end],
+			pdutlv.TagMoreMessagesToSend: 1,
+		}
+		if i == countParts-1 {
+			fields[pdutlv.TagMoreMessagesToSend] = 0
+		}
+
+		p := pdu.NewDataSM(fields)
+		f := p.Fields()
+		f.Set(pdufield.SourceAddr, sm.Src)
+		f.Set(pdufield.DestinationAddr, sm.Dst)
+
+		f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
+		f.Set(pdufield.ServiceType, sm.ServiceType)
+		f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
+		f.Set(pdufield.SourceAddrNPI, sm.SourceAddrNPI)
+		f.Set(pdufield.DestAddrTON, sm.DestAddrTON)
+		f.Set(pdufield.DestAddrNPI, sm.DestAddrNPI)
+		f.Set(pdufield.ESMClass, 0x40)
+		// hard code to binary2 0x04
+		f.Set(pdufield.DataCoding, uint8(pdutext.Binary2Type))
 		resp, err := t.do(p)
 		if err != nil {
 			return nil, err
