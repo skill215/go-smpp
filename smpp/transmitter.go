@@ -550,7 +550,7 @@ func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage
 		f.Set(pdufield.SourceAddrNPI, sm.SourceAddrNPI)
 		f.Set(pdufield.DestAddrTON, sm.DestAddrTON)
 		f.Set(pdufield.DestAddrNPI, sm.DestAddrNPI)
-		f.Set(pdufield.ESMClass, 0x40)
+		f.Set(pdufield.ESMClass, 0x00)
 		// hard code to binary2 0x04
 		f.Set(pdufield.DataCoding, uint8(pdutext.Binary2Type))
 		resp, err := t.do(p)
