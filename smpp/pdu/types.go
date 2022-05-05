@@ -248,7 +248,7 @@ func newDataSM(hdr *Header) *codec {
 
 // NewDataSM creates and initializes a new DataSM PDU.
 func NewDataSM(fields pdutlv.Fields) Body {
-	b := newSubmitSM(&Header{ID: DataSMID})
+	b := newDataSM(&Header{ID: DataSMID})
 	b.init()
 	for tag, value := range fields {
 		_ = b.t.Set(tag, value)
