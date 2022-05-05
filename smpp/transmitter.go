@@ -520,8 +520,11 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 // It returns the same sm object.
 func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage, error) {
 	maxLen := 140
-	payload := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
-	fmt.Printf("%+v", payload)
+	payload, ok := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("No message_payload sepcified in ShortMessage")
+	}
+
 	countParts := int((len(payload))/maxLen) + 1
 
 	parts := make([]ShortMessage, 0, countParts)
