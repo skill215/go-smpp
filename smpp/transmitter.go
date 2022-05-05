@@ -521,6 +521,7 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage, error) {
 	maxLen := 140
 	payload, ok := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
+	fmt.Printf("%d,   %+v", len(payload), payload)
 	if !ok {
 		return nil, fmt.Errorf("No message_payload sepcified in ShortMessage")
 	}
