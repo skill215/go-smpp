@@ -521,9 +521,8 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage, error) {
 	maxLen := 140
 	payload, ok := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
-	fmt.Printf("%d,   %+v", len(payload), payload)
 	if !ok {
-		return nil, fmt.Errorf("No message_payload sepcified in ShortMessage")
+		return nil, fmt.Errorf("No message_payload tag in ShortMessage")
 	}
 
 	countParts := int((len(payload))/maxLen) + 1
@@ -531,15 +530,14 @@ func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage
 	parts := make([]ShortMessage, 0, countParts)
 
 	for i := 0; i < countParts; i++ {
-		end := countParts
+		fields := pdutlv.Fields{}
 		if i != countParts-1 {
-			end = (i + 1) * maxLen
+			fields[pdutlv.TagMessagePayload] = payload[i*maxLen : (i+1)*maxLen]
+			fields[pdutlv.TagMoreMessagesToSend] = 1
+		} else {
+			fields[pdutlv.TagMessagePayload] = payload[i*maxLen:]
 		}
 
-		fields := pdutlv.Fields{
-			pdutlv.TagMessagePayload:     payload[i*maxLen : end : len(payload)],
-			pdutlv.TagMoreMessagesToSend: 1,
-		}
 		if i == countParts-1 {
 			fields[pdutlv.TagMoreMessagesToSend] = 0
 		}
