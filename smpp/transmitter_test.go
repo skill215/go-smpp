@@ -222,6 +222,61 @@ func TestLongMessage(t *testing.T) {
 	}
 }
 
+func TestDataLongMessagePayload(t *testing.T) {
+	s := smpptest.NewUnstartedServer()
+	count := 0
+	s.Handler = func(c smpptest.Conn, p pdu.Body) {
+		switch p.Header().ID {
+		case pdu.DataSMID:
+			r := pdu.NewDataSMResp()
+			r.Header().Seq = p.Header().Seq
+			r.Fields().Set(pdufield.MessageID, fmt.Sprintf("foobar%d", count))
+			count++
+			c.Write(r)
+		default:
+			smpptest.EchoHandler(c, p)
+		}
+	}
+	s.Start()
+	defer s.Close()
+	tx := &Transmitter{
+		Addr:   s.Addr(),
+		User:   smpptest.DefaultUser,
+		Passwd: smpptest.DefaultPasswd,
+	}
+	defer tx.Close()
+	conn := <-tx.Bind()
+	switch conn.Status() {
+	case Connected:
+	default:
+		t.Fatal(conn.Error())
+	}
+	payload := "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam consequat nisl enim, vel finibus neque aliquet sit amet. Interdum et malesuada fames ac ante ipsum primis in faucibus."
+	parts, err := tx.DataLongMsg(&DataMessage{
+		Src:      "root",
+		Dst:      "foobar",
+		Register: pdufield.NoDeliveryReceipt,
+		TLVFields: pdutlv.Fields{
+			pdutlv.TagMessagePayload: []byte(payload),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("expected %d responses, but received %d", 2, len(parts))
+	}
+	for index, dm := range parts {
+		msgid := dm.RespID()
+		if msgid == "" {
+			t.Fatalf("pdu does not contain msgid: %#v", dm.Resp())
+		}
+		if msgid != fmt.Sprintf("foobar%d", index) {
+			t.Fatalf("unexpected msgid: want foobar%d, have %q", index, msgid)
+		}
+	}
+}
+
 func TestLongMessageAsUCS2(t *testing.T) {
 	s := smpptest.NewUnstartedServer()
 	var receivedMsg string
