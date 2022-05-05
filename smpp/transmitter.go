@@ -521,6 +521,7 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 func (t *Transmitter) DataSmLongMessagePayload(sm *ShortMessage) ([]ShortMessage, error) {
 	maxLen := 140
 	payload := sm.TLVFields[pdutlv.TagMessagePayload].([]byte)
+	fmt.Printf("%+v", payload)
 	countParts := int((len(payload))/maxLen) + 1
 
 	parts := make([]ShortMessage, 0, countParts)
