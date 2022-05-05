@@ -14,6 +14,7 @@ import (
 	"github.com/skill215/go-smpp/smpp/pdu"
 	"github.com/skill215/go-smpp/smpp/pdu/pdufield"
 	"github.com/skill215/go-smpp/smpp/pdu/pdutext"
+	"github.com/skill215/go-smpp/smpp/pdu/pdutlv"
 	"github.com/skill215/go-smpp/smpp/smpptest"
 )
 
@@ -58,6 +59,54 @@ func TestShortMessage(t *testing.T) {
 	msgid := sm.RespID()
 	if msgid == "" {
 		t.Fatalf("pdu does not contain msgid: %#v", sm.Resp())
+	}
+	if msgid != "foobar" {
+		t.Fatalf("unexpected msgid: want foobar, have %q", msgid)
+	}
+}
+
+func TestDataMessage(t *testing.T) {
+	s := smpptest.NewUnstartedServer()
+	s.Handler = func(c smpptest.Conn, p pdu.Body) {
+		switch p.Header().ID {
+		case pdu.DataSMID:
+			r := pdu.NewDataSMResp()
+			r.Header().Seq = p.Header().Seq
+			r.Fields().Set(pdufield.MessageID, "foobar")
+			c.Write(r)
+		default:
+			smpptest.EchoHandler(c, p)
+		}
+	}
+	s.Start()
+	defer s.Close()
+	tx := &Transmitter{
+		Addr:        s.Addr(),
+		User:        smpptest.DefaultUser,
+		Passwd:      smpptest.DefaultPasswd,
+		RateLimiter: rate.NewLimiter(rate.Limit(10), 1),
+	}
+	defer tx.Close()
+	conn := <-tx.Bind()
+	switch conn.Status() {
+	case Connected:
+	default:
+		t.Fatal(conn.Error())
+	}
+	dm, err := tx.DataMsg(&DataMessage{
+		Src:      "root",
+		Dst:      "foobar",
+		Register: pdufield.NoDeliveryReceipt,
+		TLVFields: pdutlv.Fields{
+			pdutlv.TagMessagePayload: []byte{0x00, 0x01, 0x02, 0x03},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgid := dm.RespID()
+	if msgid == "" {
+		t.Fatalf("pdu does not contain msgid: %#v", dm.Resp())
 	}
 	if msgid != "foobar" {
 		t.Fatalf("unexpected msgid: want foobar, have %q", msgid)
