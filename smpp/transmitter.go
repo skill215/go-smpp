@@ -453,7 +453,7 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 		if resp.PDU == nil {
 			return parts, fmt.Errorf("unexpected empty PDU")
 		}
-		if id := resp.PDU.Header().ID; id != pdu.DataSMRespID {
+		if id := resp.PDU.Header().ID; id != pdu.SubmitSMRespID {
 			return parts, fmt.Errorf("unexpected PDU ID: %s", id)
 		}
 		if s := resp.PDU.Header().Status; s != 0 {
