@@ -478,7 +478,7 @@ func (t *Transmitter) dataMsg(dm *DataMessage, p pdu.Body) (*DataMessage, error)
 	f.Set(pdufield.DestAddrTON, dm.DestAddrTON)
 	f.Set(pdufield.DestAddrNPI, dm.DestAddrNPI)
 	f.Set(pdufield.ESMClass, dm.ESMClass)
-	f.Set(pdufield.DataCoding, dm.DataCoding)
+	f.Set(pdufield.DataCoding, uint8(dm.DataCoding))
 	resp, err := t.do(p)
 	if err != nil {
 		return nil, err
