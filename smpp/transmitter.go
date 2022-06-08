@@ -519,6 +519,7 @@ func (t *Transmitter) DataLongMsg(dm *DataMessage) ([]DataMessage, error) {
 			fields[pdutlv.TagMoreMessagesToSend] = []byte{0x01}
 		} else {
 			fields[pdutlv.TagMessagePayload] = payload[i*maxLen:]
+			delete(fields, pdutlv.TagMoreMessagesToSend)
 		}
 
 		p := pdu.NewDataSM(fields)
