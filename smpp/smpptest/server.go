@@ -28,9 +28,9 @@ var (
 // that is called when client PDU messages arrive.
 type HandlerFunc func(c Conn, m pdu.Body)
 
-// Server is an SMPP server for testing purposes. By default it authenticate
-// clients with the configured credentials, and echoes any other PDUs
-// back to the client.
+// Server is an SMPP server for testing purposes. By default it
+// authenticates clients with the configured credentials, and echoes any
+// other PDUs back to the client.
 type Server struct {
 	User    string
 	Passwd  string
@@ -104,15 +104,21 @@ func (srv *Server) Serve() {
 		}
 
 		c := newConn(cli)
+		srv.mu.Lock()
 		srv.conns = append(srv.conns, c)
+		srv.mu.Unlock()
 		go srv.handle(c)
 	}
 }
 
-// BroadcastMessage broadcasts a test PDU to the all bound clients
+// BroadcastMessage broadcasts a test PDU to all bound clients.
 func (srv *Server) BroadcastMessage(p pdu.Body) {
-	for i := range srv.conns {
-		srv.conns[i].Write(p)
+	srv.mu.Lock()
+	conns := make([]Conn, len(srv.conns))
+	copy(conns, srv.conns)
+	srv.mu.Unlock()
+	for _, c := range conns {
+		c.Write(p)
 	}
 }
 

@@ -31,6 +31,7 @@ loop:
 		case
 			AddressRange,
 			DestinationAddr,
+			ESMAddr,
 			ErrorCode,
 			FinalDate,
 			MessageID,
@@ -56,6 +57,8 @@ loop:
 			DataCoding,
 			DestAddrNPI,
 			DestAddrTON,
+			ESMAddrNPI,
+			ESMAddrTON,
 			ESMClass,
 			InterfaceVersion,
 			NumberDests,
@@ -129,7 +132,7 @@ loop:
 				udh.IELength = Fixed{Data: b}
 				// Read IEData
 				bt := r.Next(l)
-				udh.IEData = Variable{Data: bt}
+				udh.IEData = SM{Data: bt}
 				udhList = append(udhList, udh)
 				if len(bt) != l {
 					break loop
@@ -210,8 +213,11 @@ loop:
 					return nil, err
 				}
 				uns.DestAddr = Variable{Data: bt}
-				// Read error code
-				uns.ErrCode = Variable{Data: r.Next(4)}
+				// Read error code (4 bytes, big-endian uint32)
+				if r.Len() < 4 {
+					return nil, fmt.Errorf("short read for unsuccess_sme err_code: want 4, have %d", r.Len())
+				}
+				copy(uns.ErrCode[:], r.Next(4))
 				// Add unSme to the list
 				unsList = append(unsList, uns)
 			}

@@ -93,13 +93,13 @@ type client struct {
 	WindowSize         uint
 	RateLimiter        RateLimiter
 
-	// internal stuff.
 	inbox chan pdu.Body
 	conn  *connSwitch
 	stop  chan struct{}
 	once  sync.Once
 	lmctx context.Context
-	// time of the last received EnquireLinkResp
+	// Time of the last received enquire_link_resp, used to detect a
+	// dead connection. Guarded by eliMtx.
 	eliTime time.Time
 	eliMtx  sync.RWMutex
 }
@@ -161,6 +161,13 @@ func (c *client) Bind() {
 				}
 			case pdu.EnquireLinkRespID:
 				c.updateEliTime()
+			case pdu.UnbindID:
+				// Server is asking us to disconnect. Acknowledge
+				// and let the read loop tear down so the
+				// reconnect path takes over.
+				c.conn.Write(pdu.NewUnbindRespSeq(p.Header().Seq))
+				c.notify(&connStatus{s: Disconnected})
+				c.conn.Close()
 			default:
 				c.inbox <- p
 			}

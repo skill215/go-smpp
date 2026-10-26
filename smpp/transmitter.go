@@ -36,12 +36,12 @@ type Transmitter struct {
 	Passwd             string        // Password.
 	SystemType         string        // System type, default empty.
 	EnquireLink        time.Duration // Enquire link interval, default 10s.
-	EnquireLinkTimeout time.Duration // Time after last EnquireLink response when connection considered down
+	EnquireLinkTimeout time.Duration // Max time without an EnquireLink response before the connection is considered down.
 	RespTimeout        time.Duration // Response timeout, default 1s.
-	BindInterval       time.Duration // Binding retry interval
+	BindInterval       time.Duration // Bind retry interval. If zero, an exponential backoff is used.
 	TLS                *tls.Config   // TLS client settings, optional.
 	RateLimiter        RateLimiter   // Rate limiter, optional.
-	WindowSize         uint
+	WindowSize         uint          // Max number of in-flight requests. Zero means unlimited.
 	rMutex             sync.Mutex
 	r                  *rand.Rand
 
@@ -112,7 +112,9 @@ func (t *Transmitter) bindFunc(c Conn) error {
 	return nil
 }
 
-// f is only set on transceiver.
+// handlePDU dispatches incoming PDUs to in-flight requesters. The
+// HandlerFunc f is only set on a Transceiver, where unsolicited PDUs
+// (e.g. deliver_sm) need to be handed to the user.
 func (t *Transmitter) handlePDU(f HandlerFunc) {
 	for {
 		p, err := t.cl.Read()
@@ -128,9 +130,11 @@ func (t *Transmitter) handlePDU(f HandlerFunc) {
 		} else if f != nil {
 			f(p)
 		}
-		if p.Header().ID == pdu.DeliverSMID { // Send DeliverSMResp
-			pResp := pdu.NewDeliverSMRespSeq(p.Header().Seq)
-			t.cl.Write(pResp)
+		switch p.Header().ID {
+		case pdu.DeliverSMID:
+			t.cl.Write(pdu.NewDeliverSMRespSeq(p.Header().Seq))
+		case pdu.DataSMID:
+			t.cl.Write(pdu.NewDataSMRespSeq(p.Header().Seq))
 		}
 	}
 	t.tx.Lock()
@@ -138,6 +142,17 @@ func (t *Transmitter) handlePDU(f HandlerFunc) {
 		rc <- &tx{Err: ErrNotConnected}
 	}
 	t.tx.Unlock()
+}
+
+// Write sends a PDU to the SMSC. It can be used to send
+// arbitrary PDUs such as GenericNACK from within a handler.
+func (t *Transmitter) Write(p pdu.Body) error {
+	t.cl.Lock()
+	defer t.cl.Unlock()
+	if t.cl.client == nil {
+		return ErrNotConnected
+	}
+	return t.cl.Write(p)
 }
 
 // Close implements the ClientConn interface.
@@ -165,7 +180,7 @@ func newUnsucessDest(p pdufield.UnSme) UnsucessDest {
 	unDest.AddrTON, _ = p.Ton.Raw().(uint8) // if there is an error default value will be set
 	unDest.AddrNPI, _ = p.Npi.Raw().(uint8)
 	unDest.Address = string(p.DestAddr.Bytes())
-	unDest.Error = pdu.Status(binary.BigEndian.Uint32(p.ErrCode.Bytes()))
+	unDest.Error = pdu.Status(binary.BigEndian.Uint32(p.ErrCode[:]))
 	return unDest
 }
 
@@ -184,15 +199,19 @@ type SM interface {
 // the Transmitter. When returned from Submit, the ShortMessage
 // provides Resp and RespID.
 type ShortMessage struct {
-	Src      string
-	Dst      string
-	DstList  []string // List of destination addreses for submit multi
-	DLs      []string //List if destribution list for submit multi
-	Text     pdutext.Codec
+	Src     string
+	Dst     string
+	DstList []string // Destination SME addresses, for submit_multi.
+	DLs     []string // Distribution list names, for submit_multi.
+	Text    pdutext.Codec
+	// Validity is the time-to-live of the message. Encoded as the
+	// validity_period PDU field. If zero, the field is omitted.
 	Validity time.Duration
-	Register pdufield.DeliverySetting
-
-	// Other fields, normally optional.
+	// RelativeValidity, when true, encodes Validity using the SMPP
+	// relative format (000000HHMMSS000R) instead of an absolute UTC
+	// timestamp.
+	RelativeValidity     bool
+	Register             pdufield.DeliverySetting
 	TLVFields            pdutlv.Fields
 	ServiceType          string
 	SourceAddrTON        uint8
@@ -207,14 +226,25 @@ type ShortMessage struct {
 	SMDefaultMsgID       uint8
 	NumberDests          uint8
 
-	resp struct {
-		sync.Mutex
-		p pdu.Body
+	resp *smResp
+}
+
+type smResp struct {
+	sync.Mutex
+	p pdu.Body
+}
+
+func (sm *ShortMessage) initResp() {
+	if sm.resp == nil {
+		sm.resp = &smResp{}
 	}
 }
 
 // Resp returns the response PDU, or nil if not set.
 func (sm *ShortMessage) Resp() pdu.Body {
+	if sm.resp == nil {
+		return nil
+	}
 	sm.resp.Lock()
 	defer sm.resp.Unlock()
 	return sm.resp.p
@@ -224,6 +254,9 @@ func (sm *ShortMessage) Resp() pdu.Body {
 // Returns empty if the response PDU is not available, or does
 // not contain the MessageID field.
 func (sm *ShortMessage) RespID() string {
+	if sm.resp == nil {
+		return ""
+	}
 	sm.resp.Lock()
 	defer sm.resp.Unlock()
 	if sm.resp.p == nil {
@@ -240,6 +273,9 @@ func (sm *ShortMessage) RespID() string {
 // Returns zero and an error if the response PDU is not available, or does
 // not contain the NoUnsuccess field.
 func (sm *ShortMessage) NumbUnsuccess() (int, error) {
+	if sm.resp == nil {
+		return 0, errors.New("Response PDU not available")
+	}
 	sm.resp.Lock()
 	defer sm.resp.Unlock()
 	if sm.resp.p == nil {
@@ -261,6 +297,9 @@ func (sm *ShortMessage) NumbUnsuccess() (int, error) {
 // Returns nil and an error if the response PDU is not available, or does
 // not contain the unsuccess_sme field.
 func (sm *ShortMessage) UnsuccessSmes() ([]UnsucessDest, error) {
+	if sm.resp == nil {
+		return nil, errors.New("Response PDU not available")
+	}
 	sm.resp.Lock()
 	defer sm.resp.Unlock()
 	if sm.resp.p == nil {
@@ -298,14 +337,20 @@ type DataMessage struct {
 	NumberDests   uint8
 	DataCoding    pdutext.DataCoding
 
-	resp struct {
-		sync.Mutex
-		p pdu.Body
+	resp *smResp
+}
+
+func (dm *DataMessage) initResp() {
+	if dm.resp == nil {
+		dm.resp = &smResp{}
 	}
 }
 
 // Resp returns the response PDU, or nil if not set.
 func (dm *DataMessage) Resp() pdu.Body {
+	if dm.resp == nil {
+		return nil
+	}
 	dm.resp.Lock()
 	defer dm.resp.Unlock()
 	return dm.resp.p
@@ -315,6 +360,9 @@ func (dm *DataMessage) Resp() pdu.Body {
 // Returns empty if the response PDU is not available, or does
 // not contain the MessageID field.
 func (dm *DataMessage) RespID() string {
+	if dm.resp == nil {
+		return ""
+	}
 	dm.resp.Lock()
 	defer dm.resp.Unlock()
 	if dm.resp.p == nil {
@@ -429,7 +477,7 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 		}
 		f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
 		if sm.Validity != time.Duration(0) {
-			f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity))
+			f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity, sm.RelativeValidity))
 		}
 		f.Set(pdufield.ServiceType, sm.ServiceType)
 		f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
@@ -447,9 +495,7 @@ func (t *Transmitter) SubmitLongMsg(sm *ShortMessage) ([]ShortMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		sm.resp.Lock()
-		sm.resp.p = resp.PDU
-		sm.resp.Unlock()
+		sm.resp = &smResp{p: resp.PDU}
 		if resp.PDU == nil {
 			return parts, fmt.Errorf("unexpected empty PDU")
 		}
@@ -483,6 +529,7 @@ func (t *Transmitter) dataMsg(dm *DataMessage, p pdu.Body) (*DataMessage, error)
 	if err != nil {
 		return nil, err
 	}
+	dm.initResp()
 	dm.resp.Lock()
 	dm.resp.p = resp.PDU
 	dm.resp.Unlock()
@@ -540,9 +587,7 @@ func (t *Transmitter) DataLongMsg(dm *DataMessage) ([]DataMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		dm.resp.Lock()
-		dm.resp.p = resp.PDU
-		dm.resp.Unlock()
+		dm.resp = &smResp{p: resp.PDU}
 		if resp.PDU == nil {
 			return parts, fmt.Errorf("unexpected empty PDU")
 		}
@@ -568,7 +613,7 @@ func (t *Transmitter) submitMsg(sm *ShortMessage, p pdu.Body, dataCoding uint8) 
 	f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
 	// Check if the message has validity set.
 	if sm.Validity != time.Duration(0) {
-		f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity))
+		f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity, sm.RelativeValidity))
 	}
 	f.Set(pdufield.ServiceType, sm.ServiceType)
 	f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
@@ -586,6 +631,7 @@ func (t *Transmitter) submitMsg(sm *ShortMessage, p pdu.Body, dataCoding uint8) 
 	if err != nil {
 		return nil, err
 	}
+	sm.initResp()
 	sm.resp.Lock()
 	sm.resp.p = resp.PDU
 	sm.resp.Unlock()
@@ -637,7 +683,7 @@ func (t *Transmitter) submitMsgMulti(sm *ShortMessage, p pdu.Body, dataCoding ui
 	f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
 	// Check if the message has validity set.
 	if sm.Validity != time.Duration(0) {
-		f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity))
+		f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity, sm.RelativeValidity))
 	}
 	f.Set(pdufield.ServiceType, sm.ServiceType)
 	f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
@@ -653,6 +699,7 @@ func (t *Transmitter) submitMsgMulti(sm *ShortMessage, p pdu.Body, dataCoding ui
 	if err != nil {
 		return nil, err
 	}
+	sm.initResp()
 	sm.resp.Lock()
 	sm.resp.p = resp.PDU
 	sm.resp.Unlock()
@@ -735,7 +782,124 @@ func (t *Transmitter) QuerySM(src, msgid string, srcTON, srcNPI uint8) (*QueryRe
 	return qr, nil
 }
 
-func convertValidity(d time.Duration) string {
+// CancelSM requests cancellation of a previously submitted message.
+// At minimum, sm.Src and msgID must be set. Per SMPP 3.4 §4.9 the
+// SMSC may also use sm.Dst (with TON/NPI) and sm.ServiceType to
+// disambiguate; pass an empty/zero value when not needed. Returns nil
+// on a successful response.
+func (t *Transmitter) CancelSM(sm *ShortMessage, msgID string) error {
+	p := pdu.NewCancelSM()
+	f := p.Fields()
+	f.Set(pdufield.ServiceType, sm.ServiceType)
+	f.Set(pdufield.MessageID, msgID)
+	f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
+	f.Set(pdufield.SourceAddrNPI, sm.SourceAddrNPI)
+	f.Set(pdufield.SourceAddr, sm.Src)
+	f.Set(pdufield.DestAddrTON, sm.DestAddrTON)
+	f.Set(pdufield.DestAddrNPI, sm.DestAddrNPI)
+	f.Set(pdufield.DestinationAddr, sm.Dst)
+	resp, err := t.do(p)
+	if err != nil {
+		return err
+	}
+	if id := resp.PDU.Header().ID; id != pdu.CancelSMRespID {
+		return fmt.Errorf("unexpected PDU ID: %s", id)
+	}
+	if s := resp.PDU.Header().Status; s != 0 {
+		return s
+	}
+	return nil
+}
+
+// ReplaceSM replaces the body of a previously submitted message that
+// has not yet been delivered. The replacement uses sm.Text,
+// sm.ScheduleDeliveryTime, sm.Validity / sm.RelativeValidity,
+// sm.Register and sm.SMDefaultMsgID. Source address fields must match
+// the original submission. Returns nil on a successful response.
+func (t *Transmitter) ReplaceSM(sm *ShortMessage, msgID string) error {
+	p := pdu.NewReplaceSM()
+	f := p.Fields()
+	f.Set(pdufield.MessageID, msgID)
+	f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
+	f.Set(pdufield.SourceAddrNPI, sm.SourceAddrNPI)
+	f.Set(pdufield.SourceAddr, sm.Src)
+	f.Set(pdufield.ScheduleDeliveryTime, sm.ScheduleDeliveryTime)
+	if sm.Validity != time.Duration(0) {
+		f.Set(pdufield.ValidityPeriod, convertValidity(sm.Validity, sm.RelativeValidity))
+	} else {
+		f.Set(pdufield.ValidityPeriod, "")
+	}
+	f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
+	f.Set(pdufield.SMDefaultMsgID, sm.SMDefaultMsgID)
+	if sm.Text != nil {
+		f.Set(pdufield.ShortMessage, sm.Text)
+	}
+	resp, err := t.do(p)
+	if err != nil {
+		return err
+	}
+	if id := resp.PDU.Header().ID; id != pdu.ReplaceSMRespID {
+		return fmt.Errorf("unexpected PDU ID: %s", id)
+	}
+	if s := resp.PDU.Header().Status; s != 0 {
+		return s
+	}
+	return nil
+}
+
+// SubmitData sends a data_sm and updates sm with the response. Unlike
+// submit_sm, data_sm carries no inline short_message; the body must be
+// supplied via the message_payload TLV
+// (sm.TLVFields[pdutlv.TagMessagePayload]) when needed. Useful for
+// payloads larger than 254 octets without UDH segmentation, on SMSCs
+// that support it.
+func (t *Transmitter) SubmitData(sm *ShortMessage) (*ShortMessage, error) {
+	p := pdu.NewDataSM(sm.TLVFields)
+	f := p.Fields()
+	f.Set(pdufield.ServiceType, sm.ServiceType)
+	f.Set(pdufield.SourceAddrTON, sm.SourceAddrTON)
+	f.Set(pdufield.SourceAddrNPI, sm.SourceAddrNPI)
+	f.Set(pdufield.SourceAddr, sm.Src)
+	f.Set(pdufield.DestAddrTON, sm.DestAddrTON)
+	f.Set(pdufield.DestAddrNPI, sm.DestAddrNPI)
+	f.Set(pdufield.DestinationAddr, sm.Dst)
+	f.Set(pdufield.ESMClass, sm.ESMClass)
+	f.Set(pdufield.RegisteredDelivery, uint8(sm.Register))
+	if sm.Text != nil {
+		f.Set(pdufield.DataCoding, uint8(sm.Text.Type()))
+	}
+	resp, err := t.do(p)
+	if err != nil {
+		return nil, err
+	}
+	sm.initResp()
+	sm.resp.Lock()
+	sm.resp.p = resp.PDU
+	sm.resp.Unlock()
+	if resp.PDU == nil {
+		return nil, fmt.Errorf("unexpected empty PDU")
+	}
+	if id := resp.PDU.Header().ID; id != pdu.DataSMRespID {
+		return sm, fmt.Errorf("unexpected PDU ID: %s", id)
+	}
+	if s := resp.PDU.Header().Status; s != 0 {
+		return sm, s
+	}
+	return sm, resp.Err
+}
+
+func convertValidity(d time.Duration, relative bool) string {
+	if relative {
+		// Relative time format YYMMDDhhmmsstnnp, see SMPP3.4 spec 7.1.1.
+		total := int(d.Seconds())
+		days := total / 86400
+		total %= 86400
+		hours := total / 3600
+		total %= 3600
+		minutes := total / 60
+		seconds := total % 60
+		return fmt.Sprintf("%02d%02d%02d%02d%02d%02d000R", 0, 0, days, hours, minutes, seconds)
+	}
 	validity := time.Now().UTC().Add(d)
 	// Absolute time format YYMMDDhhmmsstnnp, see SMPP3.4 spec 7.1.1.
 	return validity.Format("060102150405") + "000+"

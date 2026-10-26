@@ -54,6 +54,14 @@ func NewGenericNACK() Body {
 	return b
 }
 
+// NewGenericNACKSeq creates a GenericNACK PDU with a specific sequence number,
+// for responding to an unsupported incoming PDU.
+func NewGenericNACKSeq(seq uint32) Body {
+	b := newGenericNACK(&Header{ID: GenericNACKID, Seq: seq})
+	b.init()
+	return b
+}
+
 // Bind PDU.
 type Bind struct{ *codec }
 
@@ -225,57 +233,6 @@ func NewSubmitSMResp() Body {
 	return b
 }
 
-// DataSM PDU.
-type DataSM struct{ *codec }
-
-func newDataSM(hdr *Header) *codec {
-	return &codec{
-		h: hdr,
-		l: pdufield.List{
-			pdufield.ServiceType,
-			pdufield.SourceAddrTON,
-			pdufield.SourceAddrNPI,
-			pdufield.SourceAddr,
-			pdufield.DestAddrTON,
-			pdufield.DestAddrNPI,
-			pdufield.DestinationAddr,
-			pdufield.ESMClass,
-			pdufield.RegisteredDelivery,
-			pdufield.DataCoding,
-		},
-	}
-}
-
-// NewDataSM creates and initializes a new DataSM PDU.
-func NewDataSM(fields pdutlv.Fields) Body {
-	b := newDataSM(&Header{ID: DataSMID})
-	b.init()
-	for tag, value := range fields {
-		_ = b.t.Set(tag, value)
-	}
-	return b
-}
-
-// DataSMResp PDU.
-type DataSMResp struct{ *codec }
-
-// newDataSMResp creates and initializes a new newDataSMResp PDU.
-func newDataSMResp(hdr *Header) *codec {
-	return &codec{
-		h: hdr,
-		l: pdufield.List{
-			pdufield.MessageID,
-		},
-	}
-}
-
-// NewDataSMResp creates and initializes a new NewDataSMResp PDU.
-func NewDataSMResp() Body {
-	b := newDataSMResp(&Header{ID: DataSMRespID})
-	b.init()
-	return b
-}
-
 // SubmitMulti PDU.
 type SubmitMulti struct{ *codec }
 
@@ -397,6 +354,63 @@ func NewDeliverSMRespSeq(seq uint32) Body {
 	return b
 }
 
+// DataSM PDU.
+type DataSM struct{ *codec }
+
+func newDataSM(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.ServiceType,
+			pdufield.SourceAddrTON,
+			pdufield.SourceAddrNPI,
+			pdufield.SourceAddr,
+			pdufield.DestAddrTON,
+			pdufield.DestAddrNPI,
+			pdufield.DestinationAddr,
+			pdufield.ESMClass,
+			pdufield.RegisteredDelivery,
+			pdufield.DataCoding,
+		},
+	}
+}
+
+// NewDataSM creates and initializes a new DataSM PDU.
+func NewDataSM(fields pdutlv.Fields) Body {
+	b := newDataSM(&Header{ID: DataSMID})
+	b.init()
+	for tag, value := range fields {
+		b.t.Set(tag, value)
+	}
+	return b
+}
+
+// DataSMResp PDU.
+type DataSMResp struct{ *codec }
+
+func newDataSMResp(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.MessageID,
+		},
+	}
+}
+
+// NewDataSMResp creates and initializes a new DataSMResp PDU.
+func NewDataSMResp() Body {
+	b := newDataSMResp(&Header{ID: DataSMRespID})
+	b.init()
+	return b
+}
+
+// NewDataSMRespSeq creates and initializes a new DataSMResp PDU for a specific seq.
+func NewDataSMRespSeq(seq uint32) Body {
+	b := newDataSMResp(&Header{ID: DataSMRespID, Seq: seq})
+	b.init()
+	return b
+}
+
 // Unbind PDU.
 type Unbind struct{ *codec }
 
@@ -421,6 +435,143 @@ func newUnbindResp(hdr *Header) *codec {
 // NewUnbindResp creates and initializes a UnbindResp PDU.
 func NewUnbindResp() Body {
 	b := newUnbindResp(&Header{ID: UnbindRespID})
+	b.init()
+	return b
+}
+
+// NewUnbindRespSeq creates and initializes a UnbindResp PDU with a
+// specific sequence number, for replying to an inbound Unbind.
+func NewUnbindRespSeq(seq uint32) Body {
+	b := newUnbindResp(&Header{ID: UnbindRespID, Seq: seq})
+	b.init()
+	return b
+}
+
+// CancelSM PDU.
+type CancelSM struct{ *codec }
+
+func newCancelSM(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.ServiceType,
+			pdufield.MessageID,
+			pdufield.SourceAddrTON,
+			pdufield.SourceAddrNPI,
+			pdufield.SourceAddr,
+			pdufield.DestAddrTON,
+			pdufield.DestAddrNPI,
+			pdufield.DestinationAddr,
+		},
+	}
+}
+
+// NewCancelSM creates and initializes a new CancelSM PDU.
+func NewCancelSM() Body {
+	b := newCancelSM(&Header{ID: CancelSMID})
+	b.init()
+	return b
+}
+
+// CancelSMResp PDU.
+type CancelSMResp struct{ *codec }
+
+func newCancelSMResp(hdr *Header) *codec {
+	return &codec{h: hdr}
+}
+
+// NewCancelSMResp creates and initializes a new CancelSMResp PDU.
+func NewCancelSMResp() Body {
+	b := newCancelSMResp(&Header{ID: CancelSMRespID})
+	b.init()
+	return b
+}
+
+// ReplaceSM PDU.
+type ReplaceSM struct{ *codec }
+
+func newReplaceSM(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.MessageID,
+			pdufield.SourceAddrTON,
+			pdufield.SourceAddrNPI,
+			pdufield.SourceAddr,
+			pdufield.ScheduleDeliveryTime,
+			pdufield.ValidityPeriod,
+			pdufield.RegisteredDelivery,
+			pdufield.SMDefaultMsgID,
+			pdufield.SMLength,
+			pdufield.ShortMessage,
+		},
+	}
+}
+
+// NewReplaceSM creates and initializes a new ReplaceSM PDU.
+func NewReplaceSM() Body {
+	b := newReplaceSM(&Header{ID: ReplaceSMID})
+	b.init()
+	return b
+}
+
+// ReplaceSMResp PDU.
+type ReplaceSMResp struct{ *codec }
+
+func newReplaceSMResp(hdr *Header) *codec {
+	return &codec{h: hdr}
+}
+
+// NewReplaceSMResp creates and initializes a new ReplaceSMResp PDU.
+func NewReplaceSMResp() Body {
+	b := newReplaceSMResp(&Header{ID: ReplaceSMRespID})
+	b.init()
+	return b
+}
+
+// AlertNotification PDU. Sent by the SMSC to notify the ESME that a
+// previously unavailable mobile station has become available.
+type AlertNotification struct{ *codec }
+
+func newAlertNotification(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.SourceAddrTON,
+			pdufield.SourceAddrNPI,
+			pdufield.SourceAddr,
+			pdufield.ESMAddrTON,
+			pdufield.ESMAddrNPI,
+			pdufield.ESMAddr,
+		},
+	}
+}
+
+// NewAlertNotification creates and initializes a new AlertNotification
+// PDU.
+func NewAlertNotification() Body {
+	b := newAlertNotification(&Header{ID: AlertNotificationID})
+	b.init()
+	return b
+}
+
+// Outbind PDU. Sent by the SMSC to instruct an ESME to bind back as a
+// receiver.
+type Outbind struct{ *codec }
+
+func newOutbind(hdr *Header) *codec {
+	return &codec{
+		h: hdr,
+		l: pdufield.List{
+			pdufield.SystemID,
+			pdufield.Password,
+		},
+	}
+}
+
+// NewOutbind creates and initializes a new Outbind PDU.
+func NewOutbind() Body {
+	b := newOutbind(&Header{ID: OutbindID})
 	b.init()
 	return b
 }
